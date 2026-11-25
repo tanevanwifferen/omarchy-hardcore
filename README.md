@@ -66,9 +66,8 @@ An Omarchy install with the Omarchy shell has almost all of this already.
 | PipeWire with `pw-cat` | the guitars | no sound |
 | `grim` 1.5 or newer | finding the text cursor | sparks land anywhere in the window |
 
-```bash
-omarchy pkg add python-numpy grim
-```
+The plugin installs nothing itself. If `python-numpy` or `grim` is missing,
+add it with your package manager.
 
 No graphics card is asked for anything special: there is no NVIDIA, CUDA or
 AI model involved, and the guitars are worked out on the processor (see
