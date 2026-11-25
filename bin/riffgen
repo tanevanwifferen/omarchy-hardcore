@@ -1,0 +1,102 @@
+#!/usr/bin/python3
+"""Build the guitar sounds for hardcore mode into ../sounds.
+
+Nothing is sampled or downloaded: every note is synthesised here. A plucked
+string (Karplus-Strong: a burst of noise going round a delay line that dulls
+it a little each lap), three of them as a power chord, played twice slightly
+out of tune like two guitars, then pushed hard into a clipping amplifier and
+through a filter shaped like a speaker cabinet.
+
+Run it again after changing anything: bin/riffgen
+"""
+import os
+
+import numpy as np
+from scipy.io import wavfile
+from scipy.signal import butter, sosfilt
+
+RATE = 48000  # the rate the sound server runs at, so nothing is resampled
+D2 = 73.42  # low string of a guitar in drop D
+rng = np.random.default_rng(1979)
+
+
+def pluck(freq, seconds, sustain, dull):
+    """One string. `sustain` is what survives each lap, `dull` 0..1 mutes it."""
+    period = int(round(RATE / freq))
+    lap = rng.uniform(-1, 1, period)
+    laps = int(seconds * RATE / period) + 1
+    out = np.empty(laps * period)
+    for i in range(laps):
+        out[i * period:(i + 1) * period] = lap
+        smooth = 0.5 * (lap + np.roll(lap, 1))
+        lap = sustain * ((1 - dull) * lap + dull * smooth)
+        lap = 0.5 * (lap + np.roll(lap, 1)) * 0.5 + lap * 0.5
+    return out[:int(seconds * RATE)]
+
+
+def chord(semitone, seconds, sustain, dull):
+    """A power chord (root, fifth, octave), double tracked."""
+    root = D2 * 2 ** (semitone / 12)
+    total = np.zeros(int(seconds * RATE))
+    for detune in (0.997, 1.004):
+        for ratio, level in ((1, 1.0), (1.5, 0.8), (2, 0.6)):
+            total += level * pluck(root * ratio * detune, seconds, sustain, dull)
+    return total
+
+
+def amp(signal, gain=30.0):
+    """Tight low end, clip hard, then a speaker cabinet."""
+    signal = sosfilt(butter(2, 110, "highpass", fs=RATE, output="sos"), signal)
+    signal = signal / (np.max(np.abs(signal)) or 1)
+    signal = np.tanh(gain * signal + 0.15) - np.tanh(0.15)
+    signal = np.tanh(3 * signal)
+    cabinet = sosfilt(butter(4, [85, 4800], "bandpass", fs=RATE, output="sos"), signal)
+    bite = sosfilt(butter(2, [1200, 3200], "bandpass", fs=RATE, output="sos"), signal)
+    return cabinet + 0.5 * bite
+
+
+def shape(signal, release=0.03, tail=None):
+    """Fade the edges so nothing clicks; `tail` lets a note die away."""
+    n = len(signal)
+    env = np.ones(n)
+    attack = int(0.002 * RATE)
+    env[:attack] = np.linspace(0, 1, attack)
+    if tail:
+        env *= np.exp(-np.arange(n) / (tail * RATE))
+    fade = int(release * RATE)
+    env[-fade:] *= np.linspace(1, 0, fade)
+    signal = signal * env
+    return signal / (np.max(np.abs(signal)) or 1)
+
+
+def squeal(seconds=1.1):
+    """A pinch harmonic screaming upwards, with a wide vibrato."""
+    t = np.arange(int(seconds * RATE)) / RATE
+    pitch = 1174.7 * 2 ** (t * 0.35) * (1 + 0.025 * np.sin(2 * np.pi * 6.5 * t) * np.minimum(1, t * 3))
+    phase = 2 * np.pi * np.cumsum(pitch) / RATE
+    tone = np.sin(phase) + 0.5 * np.sin(2 * phase) + 0.3 * np.sin(3 * phase)
+    tone += 0.25 * chord(0, seconds, 0.999, 0.1) / 3
+    return shape(amp(tone, 12.0), release=0.25, tail=0.9)
+
+
+def save(folder, name, signal, level):
+    wavfile.write(os.path.join(folder, name + ".wav"), RATE, np.int16(signal * level * 32767))
+
+
+def main():
+    folder = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sounds")
+    os.makedirs(folder, exist_ok=True)
+    # Palm-muted chugs on the open low string: three takes, so that a run of
+    # them does not sound like a machine.
+    for take in "abc":
+        save(folder, "chug-" + take, shape(amp(chord(0, 0.17, 0.955, 0.75))), 0.8)
+    # Open power chords up the neck, left to ring a little.
+    for semitone in (0, 1, 3, 5, 6, 8):
+        save(folder, "chord-%d" % semitone, shape(amp(chord(semitone, 0.42, 0.997, 0.15)), release=0.12), 0.85)
+    # The last chord of a run, left to die away.
+    save(folder, "ring", shape(amp(chord(0, 2.4, 0.9985, 0.1)), release=0.5, tail=1.1), 0.9)
+    save(folder, "squeal", squeal(), 0.6)
+
+
+if __name__ == "__main__":
+    main()

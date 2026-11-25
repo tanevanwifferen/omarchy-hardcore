@@ -1,0 +1,20 @@
+{
+  "tooltip.on": "Hardcore mode is on: %1. Click to calm down, right click for the menu",
+  "tooltip.off": "Hardcore mode: %1. Click to switch it on, right click for the menu",
+  "mode.sparks": "Sparks",
+  "mode.fire": "Fire",
+  "mode.party": "Party",
+  "mode.glitch": "Glitch",
+  "menu.on": "Hardcore mode",
+  "menu.on.description": "Typing sets it all off",
+  "menu.shaking": "Shake",
+  "menu.shaking.description": "Rattle the window you type in",
+  "menu.sparks": "Sparks",
+  "menu.sparks.description": "Pixels flying from the text cursor",
+  "menu.edges": "Screen edges",
+  "menu.edges.description": "Glow and sparks from the sides of the screen",
+  "menu.counter": "Combo counter",
+  "menu.counter.description": "Count the keys in a row",
+  "menu.sound": "Guitars",
+  "menu.sound.description": "One note of the riff per key"
+}

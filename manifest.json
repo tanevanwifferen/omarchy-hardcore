@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.tanevanwifferen.hardcore",
+  "name": "Hardcore mode",
+  "version": "1.0.0",
+  "author": "Tane van Wifferen",
+  "license": "MIT",
+  "homepage": "https://github.com/tanevanwifferen/omarchy-hardcore",
+  "description": "A gimmick: while it is on, typing shakes the focused window, throws sparks from the text cursor and plays metal guitar, one note per key.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Hardcore mode",
+    "description": "A flame that turns hardcore mode on and off: the focused window shakes and sparks while you type.",
+    "category": "Fun",
+    "aliases": [
+      "hardcore",
+      "shake",
+      "power mode"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "centerBegin"
+  }
+}

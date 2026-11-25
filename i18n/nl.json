@@ -1,0 +1,20 @@
+{
+  "tooltip.on": "Hardcore mode staat aan: %1. Klik om te kalmeren, rechtsklik voor het menu",
+  "tooltip.off": "Hardcore mode: %1. Klik om aan te zetten, rechtsklik voor het menu",
+  "mode.sparks": "Vonken",
+  "mode.fire": "Vuur",
+  "mode.party": "Feest",
+  "mode.glitch": "Glitch",
+  "menu.on": "Hardcore mode",
+  "menu.on.description": "Typen zet alles in gang",
+  "menu.shaking": "Trillen",
+  "menu.shaking.description": "Schud het venster waarin je typt",
+  "menu.sparks": "Vonken",
+  "menu.sparks.description": "Pixels die uit de tekstcursor spatten",
+  "menu.edges": "Schermranden",
+  "menu.edges.description": "Gloed en vonken vanaf de zijkanten van het scherm",
+  "menu.counter": "Comboteller",
+  "menu.counter.description": "Telt de toetsen achter elkaar",
+  "menu.sound": "Gitaren",
+  "menu.sound.description": "Eén noot van de riff per toets"
+}

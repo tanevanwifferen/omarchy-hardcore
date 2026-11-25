@@ -1,0 +1,358 @@
+#!/usr/bin/python3
+"""Tell hardcore mode when a key is pressed, and where the typing happens.
+
+Prints "k" for every key press on any keyboard, read from /dev/input (needs
+the `input` group). Which key it was is never read out: every press becomes
+the same "k", so nothing typed can leak.
+
+It also looks for the text cursor. Shortly after a key press it takes a
+picture of the focused window alone (`grim -T`, so without the shake and the
+sparks on top), compares it with the picture from the key before, and takes
+the small patch that changed as the place being typed at. That is printed as
+"c <x> <y>", fractions of the window's width and height. The pictures are
+compared in memory and thrown away; nothing is written anywhere.
+
+And it plays the guitars, here rather than in the shell so that a note starts
+within a few milliseconds of its key: one sound stream stays open (`pw-cat`
+on a pipe, asked for a 5 ms buffer) and the notes are mixed into it, fed just
+ahead of the clock. Every key plays the next note of the riff; "sound 0" or
+"sound 1" on stdin turns the guitars off or on.
+"""
+import collections
+import glob
+import json
+import os
+import select
+import signal
+import struct
+import subprocess
+import sys
+import threading
+import time
+import wave
+
+try:
+    import numpy as np
+except ImportError:  # no caret then, only key presses
+    np = None
+
+EVENT = struct.Struct("llHHi")
+EV_KEY = 1
+KEY_A = 30
+
+# How long an app gets to draw the typed character before the picture.
+SETTLE = 0.045
+# A picture older than this is no use to compare with: take a new one first.
+STALE = 0.6
+
+
+def is_keyboard(path):
+    name = os.path.basename(path)
+    try:
+        with open(f"/sys/class/input/{name}/device/capabilities/key") as f:
+            words = f.read().split()
+    except OSError:
+        return False
+    bits = 0
+    for word in words:
+        bits = (bits << 64) | int(word, 16)
+    return bool(bits >> KEY_A & 1)
+
+
+def capture():
+    """The focused window as (id, height x width x 3 array), or None."""
+    try:
+        window = json.loads(subprocess.run(
+            ["hyprctl", "-j", "activewindow"], capture_output=True, timeout=1).stdout or b"{}")
+        ident = window.get("stableId")
+        if not ident:
+            return None
+        shot = subprocess.run(
+            ["grim", "-T", str(ident), "-t", "ppm", "-"], capture_output=True, timeout=1)
+        if shot.returncode != 0:
+            return None
+        magic, width, height, depth = shot.stdout[:64].split()[:4]
+        width, height = int(width), int(height)
+        size = width * height * 3
+        if magic != b"P6" or depth != b"255" or size <= 0 or len(shot.stdout) < size:
+            return None
+        pixels = np.frombuffer(shot.stdout[-size:], dtype=np.uint8).reshape(height, width, 3)
+        return str(ident), pixels
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def locate(before, after, last, seen):
+    """Where the typing changed the picture, as (x, y) fractions, or None.
+
+    A typed character changes one short strip of one line. Anything bigger
+    is scrolling or a redraw and says nothing. Other small things change
+    with a key too: a "Ln 3, Col 14" in a status bar, a spinner, a clock.
+    Those change in the same spot again and again, while the caret moves
+    on with every key; so a change where one was seen before (`seen`, the
+    spots of the last few keys, in pixels) is not the caret. Of what is
+    left, the one nearest the last caret wins; with no caret yet and more
+    than one to choose from there is no telling, and the next key decides.
+
+    Every small change found is added to `seen`.
+    """
+    if before.shape != after.shape:
+        return None
+    height, width = after.shape[:2]
+    changed = (before != after).any(axis=2)
+    rows = np.flatnonzero(changed.any(axis=1))
+    if rows.size == 0 or rows.size > height * 0.5:
+        return None
+    bands = np.split(rows, np.flatnonzero(np.diff(rows) > 4) + 1)
+    spots = []
+    for band in bands:
+        top, bottom = int(band[0]), int(band[-1])
+        cols = np.flatnonzero(changed[top:bottom + 1].any(axis=0))
+        left, right = int(cols[0]), int(cols[-1])
+        if bottom - top + 1 > height * 0.08 or right - left + 1 > width * 0.35:
+            continue
+        spots.append((right, (top + bottom) // 2))
+    old = [spot for earlier in seen for spot in earlier]
+    moved = [spot for spot in spots
+             if not any(abs(spot[0] - o[0]) <= 3 and abs(spot[1] - o[1]) <= 3 for o in old)]
+    seen.append(spots)
+    found = [(x / width, y / height) for x, y in moved]
+    if not found:
+        return None
+    if last:
+        return min(found, key=lambda at: abs(at[1] - last[1]) * 3 + abs(at[0] - last[0]))
+    return found[0] if len(found) == 1 else None
+
+
+RATE = 48000
+# How far ahead of the clock the stream is fed: the price of never running dry.
+LEAD = int(RATE * 0.008)
+
+# Palm-muted chugs on the low string with a chord thrown in, so the typing
+# sets the tempo.
+RIFF = [
+    "chug-a", "chug-b", "chord-3", "chug-c", "chug-a", "chord-5", "chug-b", "chug-c",
+    "chord-6", "chord-5", "chug-a", "chug-b", "chord-3", "chug-c", "chord-1", "chord-0",
+    "chug-a", "chug-b", "chord-3", "chug-c", "chug-a", "chord-5", "chug-b", "chord-8",
+    "chord-6", "chord-5", "chug-a", "chug-b", "chord-3", "chord-1", "chug-c", "chord-0",
+]
+
+
+class Guitars:
+    """The notes of sounds/, mixed into one open stream."""
+
+    def __init__(self, folder):
+        self.enabled = True
+        self.sounds = {}
+        self.voices = []      # [samples, position, gain]
+        self.player = None
+        self.started = None   # when the stream's clock began
+        self.written = 0      # samples fed since then
+        self.quiet = 0.0      # since when nothing has been sounding
+        self.streak = 0
+        self.last_key = 0.0
+        self.ring_due = None
+        if np is None:
+            return
+        for path in glob.glob(os.path.join(folder, "*.wav")):
+            try:
+                with wave.open(path) as f:
+                    if f.getframerate() != RATE or f.getnchannels() != 1 or f.getsampwidth() != 2:
+                        continue
+                    data = np.frombuffer(f.readframes(f.getnframes()), dtype=np.int16)
+                self.sounds[os.path.basename(path)[:-4]] = data.astype(np.float32) / 32768
+            except (OSError, wave.Error, EOFError):
+                pass
+
+    def busy(self):
+        return bool(self.voices) or self.ring_due is not None or self.started is not None
+
+    def play(self, name, gain):
+        if self.enabled and name in self.sounds:
+            self.voices.append([self.sounds[name], 0, gain])
+
+    def key(self, now):
+        if now - self.last_key > 2.5:
+            self.streak = 0
+        # Keys landing on top of each other share a note.
+        if now - self.last_key > 0.03:
+            self.play(RIFF[self.streak % len(RIFF)], 0.5)
+            # Every 25th key in a row gets a squeal on top.
+            if (self.streak + 1) % 25 == 0:
+                self.play("squeal", 0.4)
+        self.streak += 1
+        self.last_key = now
+        # A proper run ends on a chord left to ring.
+        self.ring_due = now + 0.22 if self.streak >= 8 else None
+
+    def open(self):
+        if self.player and self.player.poll() is None:
+            return True
+        try:
+            self.player = subprocess.Popen(
+                ["pw-cat", "--playback", "--raw", "--rate", str(RATE), "--channels", "1",
+                 "--format", "s16", "--latency", "5ms",
+                 "-P", "{ node.name=omarchy-hardcore media.role=Game }", "-"],
+                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            os.set_blocking(self.player.stdin.fileno(), False)
+        except OSError:
+            self.player = None
+            self.enabled = False
+            return False
+        self.started = None
+        return True
+
+    def close(self):
+        if self.player:
+            self.player.terminate()
+            self.player = None
+
+    def tick(self, now):
+        """Feed the stream up to a little past now."""
+        if self.ring_due is not None and now >= self.ring_due:
+            self.ring_due = None
+            self.play("ring", 0.5)
+        if not self.voices:
+            # Keep feeding silence for a moment, then let the stream rest.
+            if self.started is None or now - self.quiet > 2:
+                self.started = None
+                return
+        else:
+            self.quiet = now
+        if not self.open():
+            return
+        if self.started is None:
+            self.started = now
+            self.written = 0
+        count = int((now - self.started) * RATE) + LEAD - self.written
+        if count <= 0:
+            return
+        if count > RATE // 10:  # fell behind: start the clock afresh
+            self.started = now
+            self.written = 0
+            count = LEAD
+        mix = np.zeros(count, dtype=np.float32)
+        for voice in self.voices:
+            part = voice[0][voice[1]:voice[1] + count]
+            mix[:len(part)] += part * voice[2]
+            voice[1] += count
+        self.voices = [v for v in self.voices if v[1] < len(v[0])]
+        try:
+            os.write(self.player.stdin.fileno(), (np.tanh(mix) * 32767).astype(np.int16).tobytes())
+        except BlockingIOError:
+            pass
+        except OSError:
+            self.close()
+        self.written += count
+
+
+class Caret(threading.Thread):
+    """Finds the text cursor off the main loop, which must keep the beat."""
+
+    def __init__(self, say):
+        super().__init__(daemon=True)
+        self.say = say
+        self.wanted = threading.Event()
+
+    def run(self):
+        frame = None      # (window id, pixels, when)
+        caret = None      # (x, y, window id)
+        seen = collections.deque(maxlen=8)  # small changes of the last keys
+        while True:
+            self.wanted.wait()
+            self.wanted.clear()
+            if frame is None or time.monotonic() - frame[2] > STALE:
+                shot = capture()
+                frame = (shot[0], shot[1], time.monotonic()) if shot else None
+            time.sleep(SETTLE)
+            shot = capture()
+            if shot and frame and shot[0] != frame[0]:
+                seen.clear()  # another window: what was seen says nothing here
+            if shot and frame and shot[0] == frame[0]:
+                last = caret[:2] if caret and caret[2] == shot[0] else None
+                at = locate(frame[1], shot[1], last, seen)
+                if at:
+                    caret = (at[0], at[1], shot[0])
+                    self.say(f"c {at[0]:.4f} {at[1]:.4f}\n")
+            frame = (shot[0], shot[1], time.monotonic()) if shot else None
+
+
+def main():
+    lock = threading.Lock()
+
+    def say(text):
+        with lock:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    guitars = Guitars(os.path.join(here, "sounds"))
+    caret = Caret(say) if np is not None else None
+    if caret:
+        caret.start()
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
+    devices = {}
+    scanned = 0.0
+    stdin = sys.stdin.fileno()
+    commands = b""
+    try:
+        while True:
+            now = time.monotonic()
+            if now - scanned > 5:  # pick up keyboards plugged in later
+                scanned = now
+                for path in glob.glob("/dev/input/event*"):
+                    if path not in devices.values() and is_keyboard(path):
+                        try:
+                            devices[os.open(path, os.O_RDONLY | os.O_NONBLOCK)] = path
+                        except OSError:
+                            pass
+            # While something sounds, come round every few milliseconds.
+            wait = 0.003 if guitars.busy() else 5
+            ready, _, _ = select.select(list(devices) + [stdin], [], [], wait)
+            presses = 0
+            for fd in ready:
+                if fd == stdin:
+                    data = os.read(stdin, 4096)
+                    if not data:
+                        return  # the shell went away
+                    commands += data
+                    *lines, commands = commands.split(b"\n")
+                    for line in lines:
+                        if line.strip() in (b"sound 0", b"sound 1"):
+                            guitars.enabled = line.strip() == b"sound 1"
+                            if not guitars.enabled:
+                                guitars.voices = []
+                    continue
+                try:
+                    data = os.read(fd, EVENT.size * 64)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    os.close(fd)
+                    del devices[fd]
+                    continue
+                for offset in range(0, len(data) - EVENT.size + 1, EVENT.size):
+                    _, _, kind, code, value = EVENT.unpack_from(data, offset)
+                    if kind == EV_KEY and value == 1 and code < 0x100:
+                        presses += 1
+            now = time.monotonic()
+            if presses:
+                guitars.key(now)
+            if np is not None:
+                guitars.tick(now)
+            if presses:
+                say("k\n" * presses)
+                if caret:
+                    caret.wanted.set()
+    except BrokenPipeError:
+        pass
+    finally:
+        guitars.close()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
