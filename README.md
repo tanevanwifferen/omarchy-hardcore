@@ -13,6 +13,8 @@ flame in the bar, and typing sets things off:
 
 Stop typing and it all stops.
 
+![A terminal in fire mode: flames rising off the bottom of the screen, a burst of sparks at the text cursor, glowing screen edges and a combo counter at 47](preview.png)
+
 > **Warning:** this flashes and shakes the screen on purpose. Do not use it if
 > you are sensitive to flashing or fast-moving images.
 
