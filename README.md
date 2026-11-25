@@ -13,7 +13,7 @@ flame in the bar, and typing sets things off:
 
 Stop typing and it all stops.
 
-![A terminal in fire mode: flames rising off the bottom of the screen, a burst of sparks at the text cursor, glowing screen edges and a combo counter at 47](preview.png)
+![Typing in a terminal in fire mode: flames rise off the bottom of the screen, sparks burst from the text cursor, the screen edges glow and a combo counter climbs](demo.gif)
 
 > **Warning:** this flashes and shakes the screen on purpose. Do not use it if
 > you are sensitive to flashing or fast-moving images.
@@ -53,19 +53,30 @@ omarchy-shell hardcore mode fire     # sparks, fire, party, glitch, or next
 omarchy-shell hardcore sound         # guitars on or off
 ```
 
-## What it needs
+## Requirements
 
-- **Hyprland.** The shake is a screen shader, set only while keys are being
-  hit and taken away when they stop. A screen shader of your own is put back
-  afterwards. No file of your configuration is changed.
-- **The `input` group**, to notice key presses (`groups` lists it on a stock
-  Omarchy install).
-- **Python 3 with numpy** (`python-numpy`) for the guitars and for finding the
-  text cursor. Without numpy you still get the shake and the sparks.
-- **PipeWire** (`pw-cat`) for the guitars.
-- **grim 1.5 or newer**, for finding the text cursor.
+An Omarchy install with the Omarchy shell has almost all of this already.
 
-Nothing is compiled, downloaded or installed, and nothing needs root.
+| Needs | For | Without it |
+|---|---|---|
+| Omarchy shell on Hyprland | everything | does not run |
+| Membership of the `input` group (`groups` shows it) | noticing key presses | nothing happens |
+| Python 3 | the helper that watches the keyboard | nothing happens |
+| `python-numpy` | the guitars, finding the text cursor | no sound; sparks land anywhere in the window |
+| PipeWire with `pw-cat` | the guitars | no sound |
+| `grim` 1.5 or newer | finding the text cursor | sparks land anywhere in the window |
+
+```bash
+omarchy pkg add python-numpy grim
+```
+
+No graphics card is asked for anything special: there is no NVIDIA, CUDA or
+AI model involved, and the guitars are worked out on the processor (see
+[Sound](#sound)). Nothing is compiled or downloaded, and nothing needs root.
+
+The shake is a Hyprland screen shader, set only while keys are being hit and
+taken away when they stop. A screen shader of your own is put back afterwards.
+No file of your configuration is changed.
 
 ## What it reads, and what it does with it
 
@@ -88,13 +99,25 @@ and the sparks then land anywhere in the window.
 
 ## Sound
 
-The guitar is not sampled: `bin/riffgen` synthesises every note (a plucked
-string model, doubled, through a clipping amplifier and a speaker filter) into
-`sounds/`. The files are in the repository, so you only run it to change the
-sound, and then it wants `python-scipy` as well.
+The guitar is not a recording and not AI-generated. `bin/riffgen` works every
+note out with a little arithmetic, on the processor, in about a second:
 
-Notes are mixed into one open stream with a 5 ms buffer, so they follow the
-keys closely on wired speakers. Bluetooth headphones add their own delay.
+1. A plucked string: a burst of noise goes round a short delay line that
+   dulls it a little on every lap (the Karplus-Strong method). The length of
+   the line sets the pitch; dulling it harder gives a palm-muted chug.
+2. Three strings make a power chord (root, fifth, octave), played twice
+   slightly out of tune, like two guitars.
+3. That goes hard into a clipping amplifier, which is where the distortion
+   comes from, and through a filter shaped like a speaker cabinet.
+
+The results are the eleven short `.wav` files in `sounds/`: three chugs, six
+chords, a squeal and a ringing last chord. They are in the repository, so you
+only run `bin/riffgen` to change the sound, and then it wants `python-scipy`
+as well.
+
+While you type, the notes are mixed into one open stream with a 5 ms buffer,
+so they follow the keys closely on wired speakers. Bluetooth headphones add
+their own delay.
 
 ## Remove
 
