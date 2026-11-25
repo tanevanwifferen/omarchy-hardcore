@@ -25,6 +25,6 @@
       "power mode"
     ],
     "allowMultiple": false,
-    "defaultSection": "centerBegin"
+    "defaultSection": "right"
   }
 }
